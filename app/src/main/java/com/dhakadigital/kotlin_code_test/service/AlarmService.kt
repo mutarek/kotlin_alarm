@@ -1,0 +1,260 @@
+package com.dhakadigital.kotlin_code_test.service
+
+import android.Manifest
+import android.annotation.SuppressLint
+import android.app.AlarmManager
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+import androidx.fragment.app.FragmentActivity
+import com.dhakadigital.kotlin_code_test.AlarmData
+import com.dhakadigital.kotlin_code_test.MainActivity
+import com.dhakadigital.kotlin_code_test.receiver.AlarmReceiver
+
+
+object AlarmService {
+    private const val PERMISSION_REQUEST_CODE = 123
+    private const val ALARM_PREFS = "AlarmPrefs"
+
+    // Set an exact alarm at the specified time
+    fun setExactAlarm(
+        context: Context,
+        triggerTimeInMillis: Long,
+        title: String,
+        message: String,
+        alarmId: Int = System.currentTimeMillis().toInt()
+    ): Int {
+        // Check and request permissions
+        if (context is FragmentActivity) {
+            requestPermissions(context)
+        }
+
+        // Create intent for AlarmReceiver
+        val intent = Intent(context, AlarmReceiver::class.java).apply {
+            putExtra("ALARM_TITLE", title)
+            putExtra("ALARM_MESSAGE", message)
+            putExtra("ALARM_TIME", triggerTimeInMillis)
+            putExtra("ALARM_ID", alarmId)
+        }
+
+        val pendingIntent = PendingIntent.getBroadcast(
+            context,
+            alarmId,
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+
+        // Set alarm based on Android version
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (alarmManager.canScheduleExactAlarms()) {
+                // Use setExactAndAllowWhileIdle for better reliability
+                alarmManager.setExactAndAllowWhileIdle(
+                    AlarmManager.RTC_WAKEUP,
+                    triggerTimeInMillis,
+                    pendingIntent
+                )
+
+
+                // Also set as alarm clock for better reliability
+                alarmManager.setAlarmClock(
+                    AlarmManager.AlarmClockInfo(triggerTimeInMillis, getPendingActivityIntent(context)),
+                    pendingIntent
+                )
+            } else {
+                // Fallback to less exact method
+//                alarmManager.set(
+//                    AlarmManager.RTC_WAKEUP,
+//                    triggerTimeInMillis,
+//                    pendingIntent
+//                )
+                alarmManager.setExactAndAllowWhileIdle(
+                    AlarmManager.RTC_WAKEUP,
+                    triggerTimeInMillis,
+                    pendingIntent
+                )
+
+
+                // Also set as alarm clock for better reliability
+                alarmManager.setAlarmClock(
+                    AlarmManager.AlarmClockInfo(triggerTimeInMillis, getPendingActivityIntent(context)),
+                    pendingIntent
+                )
+            }
+        } else {
+            // For older Android versions
+            alarmManager.setExactAndAllowWhileIdle(
+                AlarmManager.RTC_WAKEUP,
+                triggerTimeInMillis,
+                pendingIntent
+            )
+        }
+
+        // Save alarm to preferences for recovery after reboot
+        saveAlarmToPrefs(context, alarmId, triggerTimeInMillis, title, message)
+
+        return alarmId
+    }
+
+    // Cancel a specific alarm
+    fun cancelAlarm(context: Context, alarmId: Int) {
+        val intent = Intent(context, AlarmReceiver::class.java)
+        val pendingIntent = PendingIntent.getBroadcast(
+            context,
+            alarmId,
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_NO_CREATE
+        )
+
+        // If the pending intent exists, cancel it
+        pendingIntent?.let {
+            val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+            alarmManager.cancel(it)
+            it.cancel()
+
+            // Remove from preferences
+            removeAlarmFromPrefs(context, alarmId)
+        }
+    }
+
+    // Get all saved alarms
+    fun getSavedAlarms(context: Context): List<AlarmData> {
+        val prefs = context.getSharedPreferences(ALARM_PREFS, Context.MODE_PRIVATE)
+        val alarms = mutableListOf<AlarmData>()
+
+        prefs.all.forEach { (key, _) ->
+            if (key.startsWith("alarm_id_")) {
+                val id = key.removePrefix("alarm_id_").toInt()
+                val time = prefs.getLong("alarm_time_$id", 0)
+                val title = prefs.getString("alarm_title_$id", "Alarm") ?: "Alarm"
+                val message = prefs.getString("alarm_message_$id", "") ?: ""
+
+                if (time > 0) {
+                    alarms.add(AlarmData(id, time, title, message))
+                }
+            }
+        }
+
+        return alarms.sortedBy { it.timeInMillis }
+    }
+
+    // Restore all alarms after device reboot
+    fun restoreAlarms(context: Context) {
+        getSavedAlarms(context).forEach { alarm ->
+            // Only restore future alarms
+            if (alarm.timeInMillis > System.currentTimeMillis()) {
+                setExactAlarm(
+                    context,
+                    alarm.timeInMillis,
+                    alarm.title,
+                    alarm.message,
+                    alarm.id
+                )
+            } else {
+                // Remove past alarms
+                removeAlarmFromPrefs(context, alarm.id)
+            }
+        }
+    }
+
+    // Save alarm details to preferences
+    private fun saveAlarmToPrefs(
+        context: Context,
+        alarmId: Int,
+        timeInMillis: Long,
+        title: String,
+        message: String
+    ) {
+        val prefs = context.getSharedPreferences(ALARM_PREFS, Context.MODE_PRIVATE)
+        prefs.edit().apply {
+            putInt("alarm_id_$alarmId", alarmId)
+            putLong("alarm_time_$alarmId", timeInMillis)
+            putString("alarm_title_$alarmId", title)
+            putString("alarm_message_$alarmId", message)
+            apply()
+        }
+    }
+
+    // Remove alarm from preferences
+    private fun removeAlarmFromPrefs(context: Context, alarmId: Int) {
+        val prefs = context.getSharedPreferences(ALARM_PREFS, Context.MODE_PRIVATE)
+        prefs.edit().apply {
+            remove("alarm_id_$alarmId")
+            remove("alarm_time_$alarmId")
+            remove("alarm_title_$alarmId")
+            remove("alarm_message_$alarmId")
+            apply()
+        }
+    }
+
+    // Request all necessary permissions
+    @SuppressLint("BatteryLife")
+    private fun requestPermissions(activity: FragmentActivity) {
+        val permissionsToRequest = mutableListOf<String>()
+
+        // Check for notification permission on Android 13+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(
+                    activity, Manifest.permission.POST_NOTIFICATIONS,
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+                permissionsToRequest.add(Manifest.permission.POST_NOTIFICATIONS)
+                permissionsToRequest.add(Manifest.permission.USE_EXACT_ALARM)
+            }
+        }
+
+        // Request permissions if needed
+        if (permissionsToRequest.isNotEmpty()) {
+            ActivityCompat.requestPermissions(
+                activity,
+                permissionsToRequest.toTypedArray(),
+                PERMISSION_REQUEST_CODE
+            )
+        }
+
+        // For Android 12+, check SCHEDULE_EXACT_ALARM permission
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val alarmManager = activity.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+            if (!alarmManager.canScheduleExactAlarms()) {
+                Intent().apply {
+                    action = Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM
+                    activity.startActivity(this)
+                }
+            }
+        }
+
+        // Request to ignore battery optimizations
+        val powerManager = activity.getSystemService(Context.POWER_SERVICE) as PowerManager
+        val packageName = activity.packageName
+        if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
+            Intent().apply {
+                action = Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+                data = Uri.parse("package:$packageName")
+                try {
+                    activity.startActivity(this)
+                } catch (e: Exception) {
+                    // Some devices might not support this
+                }
+            }
+        }
+    }
+
+    // Get pending intent for showing the app when alarm icon is clicked in status bar
+    private fun getPendingActivityIntent(context: Context): PendingIntent {
+        val intent = Intent(context, MainActivity::class.java)
+        return PendingIntent.getActivity(
+            context,
+            0,
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+    }
+}

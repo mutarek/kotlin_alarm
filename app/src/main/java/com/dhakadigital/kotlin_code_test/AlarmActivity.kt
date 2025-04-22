@@ -1,0 +1,110 @@
+package com.dhakadigital.kotlin_code_test
+
+import android.annotation.SuppressLint
+import android.app.KeyguardManager
+import android.app.NotificationManager
+import android.content.Context
+import android.os.Build
+import android.os.Bundle
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.view.WindowManager
+import android.widget.Button
+import android.widget.TextView
+import androidx.activity.enableEdgeToEdge
+import androidx.annotation.RequiresApi
+import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import com.dhakadigital.kotlin_code_test.service.AlarmService
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+class AlarmActivity : AppCompatActivity() {
+
+    private lateinit var dismissButton: Button
+    private lateinit var snoozeButton: Button
+
+    @SuppressLint("MissingInflatedId")
+    @RequiresApi(Build.VERSION_CODES.O)
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(true)
+            setTurnScreenOn(true)
+        } else {
+            window.addFlags(
+                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                        WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+            )
+        }
+
+        // Keep screen on
+        window.addFlags(
+            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
+                    WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                    WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+                    WindowManager.LayoutParams.FLAG_FULLSCREEN
+        )
+
+        // For Android 13+, request to dismiss keyguard
+        val keyguardManager = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            keyguardManager.requestDismissKeyguard(this, null)
+        }
+
+        setContentView(R.layout.activity_alarm)
+
+        dismissButton = findViewById(R.id.dismiss_button)
+        snoozeButton = findViewById(R.id.snooze_button)
+
+        // Get data from intent
+        val title = intent.getStringExtra("ALARM_TITLE") ?: "Alarm"
+        val message = intent.getStringExtra("ALARM_MESSAGE") ?: "Time to wake up!"
+        val timeInMillis = intent.getLongExtra("ALARM_TIME", System.currentTimeMillis())
+        val alarmId = intent.getIntExtra("ALARM_ID", -1)
+
+
+        // Start playing alarm sound
+        startAlarmSound()
+
+        // Set up buttons
+        dismissButton.setOnClickListener {
+            stopAlarmSound()
+            AlarmService.cancelAlarm(this, alarmId)
+            finish()
+        }
+
+        snoozeButton.setOnClickListener {
+            stopAlarmSound()
+            // Snooze for 10 minutes
+            val snoozeTime = System.currentTimeMillis() + (10 * 60 * 1000)
+            AlarmService.setExactAlarm(
+                this,
+                snoozeTime,
+                title,
+                message,
+                alarmId
+            )
+            finish()
+        }
+    }
+
+    private fun startAlarmSound() {
+        //        Intent(this, AlarmSoundService::class.java).also { intent ->
+        //            startService(intent)
+        //        }
+    }
+
+    private fun stopAlarmSound() {
+        //        Intent(this, AlarmSoundService::class.java).also { intent ->
+        //            stopService(intent)
+        //        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        stopAlarmSound()
+    }
+}

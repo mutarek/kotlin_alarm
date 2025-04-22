@@ -1,0 +1,116 @@
+package com.dhakadigital.kotlin_code_test
+
+import android.app.AlarmManager
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
+import androidx.core.app.ActivityCompat
+import android.Manifest
+
+fun setExactAlarm(context: Context, triggerTimeInMillis: Long) {
+    // Check and request necessary permissions
+    requestAlarmPermissions(context)
+
+    // Create a unique ID for the alarm
+    val alarmId = System.currentTimeMillis().toInt()
+
+    // Create the intent for the alarm
+    val alarmIntent = Intent(context, AlarmReceiver::class.java).let { intent ->
+        // Use FLAG_UPDATE_CURRENT to update the existing PendingIntent with the same ID if it exists
+        PendingIntent.getBroadcast(
+            context,
+            alarmId,
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+    }
+
+    val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+
+    // For Android 13, AlarmManager.setAlarmClock() is most reliable for exact alarms
+    // when the app is killed
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        // Check if we have permission for exact alarms on Android 12+
+        if (alarmManager.canScheduleExactAlarms()) {
+            alarmManager.setExactAndAllowWhileIdle(
+                AlarmManager.RTC_WAKEUP,
+                triggerTimeInMillis,
+                alarmIntent
+            )
+
+            // Also set as alarm clock for better reliability
+            alarmManager.setAlarmClock(
+                AlarmManager.AlarmClockInfo(triggerTimeInMillis, null),
+                alarmIntent
+            )
+        } else {
+            // If we don't have permission, use a less exact method
+            alarmManager.set(
+                AlarmManager.RTC_WAKEUP,
+                triggerTimeInMillis,
+                alarmIntent
+            )
+        }
+    } else {
+        // For older Android versions
+        alarmManager.setExactAndAllowWhileIdle(
+            AlarmManager.RTC_WAKEUP,
+            triggerTimeInMillis,
+            alarmIntent
+        )
+    }
+
+    // Save the alarm details to SharedPreferences so we can recreate on reboot
+    saveAlarmToPrefs(context, alarmId, triggerTimeInMillis)
+}
+
+private fun requestAlarmPermissions(context: Context) {
+    // For Android 13+, check notification permission
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        if (ActivityCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            // In your activity, request permission:
+        }
+    }
+
+    // For Android 12+, check SCHEDULE_EXACT_ALARM permission
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        if (!alarmManager.canScheduleExactAlarms()) {
+            // Guide the user to enable this permission in settings
+            Intent().apply {
+                action = Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM
+                context.startActivity(this)
+            }
+        }
+    }
+
+    // Request to ignore battery optimizations
+    val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+    val packageName = context.packageName
+    if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
+        Intent().apply {
+            action = Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+            data = Uri.parse("package:$packageName")
+            try {
+                context.startActivity(this)
+            } catch (e: Exception) {
+                // Some devices might not support this
+            }
+        }
+    }
+}
+
+// Save alarm details to recreate on device reboot
+private fun saveAlarmToPrefs(context: Context, alarmId: Int, triggerTimeInMillis: Long) {
+    val prefs = context.getSharedPreferences("AlarmPrefs", Context.MODE_PRIVATE)
+    prefs.edit().apply {
+        putLong("alarm_$alarmId", triggerTimeInMillis)
+        apply()
+    }
+}

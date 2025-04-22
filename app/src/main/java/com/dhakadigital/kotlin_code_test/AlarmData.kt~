@@ -1,0 +1,8 @@
+package com.dhakadigital.sheba_alarm
+
+data class AlarmData(
+    val id: Int,
+    val timeInMillis: Long,
+    val title: String,
+    val message: String
+)

@@ -1,0 +1,112 @@
+package com.dhakadigital.kotlin_code_test
+
+import android.Manifest
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
+import android.os.PowerManager
+import android.widget.Toast
+import androidx.core.app.ActivityCompat
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+
+
+class AlarmReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context?, intent: Intent?) {
+        if (context == null) return
+
+        // Acquire a wake lock with timeout
+        val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+        val wakeLock = powerManager.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
+            "MyApp:AlarmFullWakeLock"
+        )
+        wakeLock.acquire(3*60*1000L) // 3 minutes timeout
+
+        // Create an intent to launch your activity
+        val alarmIntent = Intent(context, AlarmActivity::class.java).apply {
+            // These flags are critical for launching from killed state
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP
+
+            // Add extra data to indicate this is from alarm
+            putExtra("FROM_ALARM", true)
+
+            // Add time to make the intent unique each time
+            putExtra("ALARM_TIME", System.currentTimeMillis())
+        }
+
+        // Launch the activity immediately
+        try {
+            context.startActivity(alarmIntent)
+        } catch (e: Exception) {
+            // Fallback to notification if direct launch fails
+            showNotification(context)
+        }
+
+        // Create notification channel for Android 8.0+
+        createNotificationChannel(context)
+
+        // Show a high-priority notification with full screen intent as backup
+        val fullScreenPendingIntent = PendingIntent.getActivity(
+            context,
+            System.currentTimeMillis().toInt(), // Unique ID
+            alarmIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        val builder = NotificationCompat.Builder(context, "alarm_notification_channel")
+            .setSmallIcon(R.drawable.ic_launcher_background)
+            .setContentTitle("Reminder Alarm")
+            .setContentText("Tap to open the reminder list")
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setFullScreenIntent(fullScreenPendingIntent, true)
+            .setOngoing(true) // Make it persistent
+            .setAutoCancel(false)
+            .setTimeoutAfter(60000) // Auto-cancel after 1 minute
+
+        with(NotificationManagerCompat.from(context)) {
+            if (ActivityCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.POST_NOTIFICATIONS
+                ) == PackageManager.PERMISSION_GRANTED
+            ) {
+                notify(System.currentTimeMillis().toInt(), builder.build())
+            }
+        }
+    }
+
+    private fun showNotification(context: Context) {
+        // Fallback notification if direct launch fails
+        // Implementation same as above notification code
+    }
+
+    private fun createNotificationChannel(context: Context) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val name = "Alarm Notifications"
+            val descriptionText = "Notifications for alarms"
+            val importance = NotificationManager.IMPORTANCE_HIGH
+            val channel = NotificationChannel("alarm_notification_channel", name, importance).apply {
+                description = descriptionText
+                enableVibration(true)
+                setSound(null, null) // No sound, we'll handle this in the activity
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                setBypassDnd(true) // Bypass Do Not Disturb
+                setShowBadge(true)
+            }
+
+            val notificationManager: NotificationManager =
+                context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            notificationManager.createNotificationChannel(channel)
+        }
+    }
+}
